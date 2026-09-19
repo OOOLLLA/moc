@@ -234,6 +234,11 @@ function trig(v){
   const c = r8(Math.cos(rad(v)));
   return {s, c, ct:r8(c/s)};
 }
+function trigExact(v){
+  const s = Math.sin(rad(v));
+  const c = Math.cos(rad(v));
+  return {s, c, ct:c/s};
+}
 
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
@@ -312,7 +317,19 @@ function renderLR2(){
       ${line(`РМЧ = МЧ2 − МЧ1 = ${fix(o.q2.mp,1)} − (${fix(o.q1.mp,1)}) = ${fix(o.rmp,1)}`)}
       ${line(`φср = (${fix(o.p1,8)}° + (${fix(o.p2,8)}°)) / 2 = ${dmHem(o.pavg,2)}`)}
       ${line(`Δφ = ${fix(o.p2,8)}° − (${fix(o.p1,8)}°) = ${dm(o.pdiff,1)}`)}`;
-    $("#lr2out").innerHTML = card("Исходные данные", inp) + card("Подробное решение", detail) + card("Итоговые значения", summary);
+    const lr2Graph = svgGammaScaleScheme({
+      pA:o.p1,
+      pB:o.p2,
+      pavg:o.pavg,
+      dphi:o.pdiff,
+      dir:o.pdiff>=0?1:-1,
+      labelA:'φ1',
+      labelB:'φ2'
+    });
+    $("#lr2out").innerHTML = card("Исходные данные", inp)
+      + card("Подробное решение", detail)
+      + card("График проверки средней широты и разности широт", lr2Graph)
+      + card("Итоговые значения", summary);
   } catch(e) {
     setStatus("#lr2status", e.message, true);
     $("#lr2out").innerHTML = "";
@@ -400,6 +417,27 @@ function solveLR3(code){
   if(v===6) s3=mkThird("Вычисление угла B","cos B = − cos A · cos C + sin A · sin C · cos b","I = cos A · cos C",T("A").c*T("C").c,"II = sin A · sin C · cos b",T("A").s*T("C").s*T("b").c,null,null,"minusplus","B");
   if(v===7) s3=mkThird("Вычисление угла C","cos C = (cos c − cos a · cos b) / (sin a · sin b)","I = cos c",T("c").c,"II = cos a · cos b",T("a").c*T("b").c,"III = sin a · sin b",T("a").s*T("b").s,"ratioMinus","C");
   if(v===8) s3=mkThird("Вычисление стороны c","cos c = (cos C + cos A · cos B) / (sin A · sin B)","I = cos C",T("C").c,"II = cos A · cos B",T("A").c*T("B").c,"III = sin A · sin B",T("A").s*T("B").s,"ratioPlus","c");
+
+  // Контроль существования сферического треугольника.
+  // Некоторые формально возможные комбинации строк исходной таблицы математически
+  // несовместимы; в таком случае нельзя превращать acos-аргумент в ±1 и выдавать 0°/180°.
+  {
+    const a=rad(vals.a), b=rad(vals.b), c3=rad(vals.c);
+    const A3=rad(vals.A), B3=rad(vals.B), C3=rad(vals.C);
+    const rr=[
+      Math.cos(a) - (Math.cos(b)*Math.cos(c3) + Math.sin(b)*Math.sin(c3)*Math.cos(A3)),
+      Math.cos(b) - (Math.cos(a)*Math.cos(c3) + Math.sin(a)*Math.sin(c3)*Math.cos(B3)),
+      Math.cos(c3) - (Math.cos(a)*Math.cos(b) + Math.sin(a)*Math.sin(b)*Math.cos(C3)),
+      Math.cos(A3) - (-Math.cos(B3)*Math.cos(C3) + Math.sin(B3)*Math.sin(C3)*Math.cos(a)),
+      Math.cos(B3) - (-Math.cos(A3)*Math.cos(C3) + Math.sin(A3)*Math.sin(C3)*Math.cos(b)),
+      Math.cos(C3) - (-Math.cos(A3)*Math.cos(B3) + Math.sin(A3)*Math.sin(B3)*Math.cos(c3))
+    ];
+    const okRange=["a","b","c","A","B","C"].every(k=>Number.isFinite(vals[k]) && vals[k]>0 && vals[k]<180);
+    const maxErr=Math.max(...rr.map(Math.abs));
+    if(!okRange || maxErr>1e-5) {
+      throw new Error("Исходные данные не образуют сферический треугольник");
+    }
+  }
 
   const cotChains={
     1:[["B","c","A","b"],["C","b","A","c"]],
@@ -572,7 +610,8 @@ function solveLR4(code){
   const pA0=DB.lr4[v][rs[0]].pA, lA0=DB.lr4[v][rs[1]].lA, pB0=DB.lr4[v][rs[2]].pB, lB0=DB.lr4[v][rs[3]].lB;
   const pA=signedCoord(...pA0), lA=signedCoord(...lA0), pB=signedCoord(...pB0), lB=signedCoord(...lB0);
   const raw=dir===1 ? lB-lA : lA-lB, dl=mod(raw+180,360)-180, adl=Math.abs(dl);
-  const dA=90-pA, dB=90-pB, tA=trig(dA), tB=trig(dB), tL=trig(adl);
+  // ЛР4 считаем с полной внутренней точностью; округление применяется только при выводе.
+  const dA=90-pA, dB=90-pB, tA=trigExact(dA), tB=trigExact(dB), tL=trigExact(adl);
   const cosS=tA.c*tB.c+tA.s*tB.s*tL.c, Sdeg=deg(Math.acos(clamp(cosS,-1,1))), Sort=Sdeg*60;
   const cotA=(tB.ct*tA.s-tA.c*tL.c)/tL.s, cotB=(tA.ct*tB.s-tB.c*tL.c)/tL.s;
   const AngA=angleFromCot(cotA), AngB=angleFromCot(cotB);
@@ -1059,6 +1098,255 @@ function lr4AngleFromCotHtml(name,cotv,res){
   else h+=line(`${name} = arctg(${fix(tgv,6)}) = ${fix(res,6)}° ≈ ${fix(res,1)}°`);
   return h;
 }
+
+function svgTopViewScheme(o){
+  // Пункт 1: вид с северного полюса.
+  // Делаем схему не "математически красивой", а учебно-понятной:
+  // круг долгот, меридиан Гринвича, меридианы A/B,
+  // отдельные дуги λA, λB и отдельная кратчайшая дуга Δλ.
+  const W=620, H=500, CX=310, CY=240, R=170;
+
+  function pt(lonDeg, r=R){
+    const a=rad(lonDeg);
+    return {x:CX + r*Math.sin(a), y:CY + r*Math.cos(a)};
+  }
+  function arcPts(startLon, deltaLon, r, n=100){
+    const arr=[];
+    for(let i=0;i<=n;i++) arr.push(pt(startLon + deltaLon*i/n, r));
+    return arr.map((p,i)=>`${i?'L':'M'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  }
+  function arcLabelPos(startLon, deltaLon, r, push=16){
+    const m = startLon + deltaLon/2;
+    const p = pt(m, r);
+    const vx = p.x - CX, vy = p.y - CY;
+    const len = Math.hypot(vx,vy) || 1;
+    return {x:p.x + vx/len*push, y:p.y + vy/len*push};
+  }
+
+  const pA=pt(o.lA), pB=pt(o.lB);
+  const p0=pt(0), p90E=pt(90), p180=pt(180), p90W=pt(-90);
+
+  // Отдельные радиусы для дуг, чтобы они не накладывались.
+  const rA = R*0.44;
+  const rB = R*0.64;
+  const rDL = R*0.92;
+
+  const lambdaAPath = arcPts(0, o.lA, rA, 80);
+  const lambdaBPath = arcPts(0, o.lB, rB, 90);
+
+  // Δλ берём от точки отхода до точки прихода по кратчайшему пути.
+  const depLon = o.dir===1 ? o.lA : o.lB;
+  const depName = o.dir===1 ? 'A' : 'B';
+  const arrName = o.dir===1 ? 'B' : 'A';
+  const deltaPath = arcPts(depLon, o.dl, rDL, 100);
+  const dirWord = o.dl>=0 ? 'E' : 'W';
+
+  const labA = arcLabelPos(0, o.lA, rA, 14);
+  const labB = arcLabelPos(0, o.lB, rB, 16);
+  const labD = arcLabelPos(depLon, o.dl, rDL, 20);
+
+  const aTextX = pA.x + (pA.x>=CX ? 16 : -16);
+  const bTextX = pB.x + (pB.x>=CX ? 16 : -16);
+  const aAnchor = pA.x>=CX ? 'start' : 'end';
+  const bAnchor = pB.x>=CX ? 'start' : 'end';
+
+  return `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="470"
+       aria-label="Пункт 1 — разность долгот и направление движения">
+    <defs>
+      <marker id="lr4p1arrBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#2f5597"/>
+      </marker>
+      <marker id="lr4p1arrDark" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#444"/>
+      </marker>
+      <style>
+        .p1txt{font-family:'Times New Roman',serif; fill:#111}
+        .p1label{paint-order:stroke; stroke:#fff; stroke-width:5px; stroke-linejoin:round}
+      </style>
+    </defs>
+
+    <rect width="${W}" height="${H}" fill="#fff"/>
+
+    <!-- Внешний круг долгот -->
+    <circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="#111" stroke-width="2.4"/>
+
+    <!-- Минимальная круговая разметка: 0 / 90 / 180 / 270 -->
+    <line x1="${CX}" y1="${CY}" x2="${CX}" y2="${(p0.y+10).toFixed(1)}" stroke="#111" stroke-width="2"/>
+    <line x1="${CX}" y1="${CY}" x2="${p180.x.toFixed(1)}" y2="${p180.y.toFixed(1)}" stroke="#bbb" stroke-width="1.2" stroke-dasharray="5 5"/>
+    <line x1="${CX}" y1="${CY}" x2="${p90E.x.toFixed(1)}" y2="${p90E.y.toFixed(1)}" stroke="#bbb" stroke-width="1.2" stroke-dasharray="5 5"/>
+    <line x1="${CX}" y1="${CY}" x2="${p90W.x.toFixed(1)}" y2="${p90W.y.toFixed(1)}" stroke="#bbb" stroke-width="1.2" stroke-dasharray="5 5"/>
+
+    <text class="p1txt p1label" x="${CX}" y="${(p0.y+23).toFixed(1)}" text-anchor="middle" font-size="15">0°</text>
+    <text class="p1txt p1label" x="${(p90E.x+18).toFixed(1)}" y="${(p90E.y+5).toFixed(1)}" text-anchor="start" font-size="15">90°</text>
+    <text class="p1txt p1label" x="${CX}" y="${(p180.y-14).toFixed(1)}" text-anchor="middle" font-size="15">180°</text>
+    <text class="p1txt p1label" x="${(p90W.x-18).toFixed(1)}" y="${(p90W.y+5).toFixed(1)}" text-anchor="end" font-size="15">270°</text>
+    <text class="p1txt" x="${CX}" y="${(p0.y+43).toFixed(1)}" text-anchor="middle" font-size="14">Гринвич</text>
+
+    <!-- Радиусы к меридианам A и B -->
+    <line x1="${CX}" y1="${CY}" x2="${pA.x.toFixed(1)}" y2="${pA.y.toFixed(1)}" stroke="#111" stroke-width="2"/>
+    <line x1="${CX}" y1="${CY}" x2="${pB.x.toFixed(1)}" y2="${pB.y.toFixed(1)}" stroke="#111" stroke-width="2"/>
+
+    <!-- Точки A и B -->
+    <circle cx="${pA.x.toFixed(1)}" cy="${pA.y.toFixed(1)}" r="4.5" fill="#111"/>
+    <circle cx="${pB.x.toFixed(1)}" cy="${pB.y.toFixed(1)}" r="4.5" fill="#111"/>
+    <text class="p1txt p1label" x="${aTextX.toFixed(1)}" y="${(pA.y-10).toFixed(1)}" text-anchor="${aAnchor}" font-size="22" font-style="italic">A</text>
+    <text class="p1txt p1label" x="${bTextX.toFixed(1)}" y="${(pB.y-10).toFixed(1)}" text-anchor="${bAnchor}" font-size="22" font-style="italic">B</text>
+
+    <!-- λA -->
+    <path d="${lambdaAPath}" fill="none" stroke="#7a7a7a" stroke-width="2" marker-end="url(#lr4p1arrDark)"/>
+    <text class="p1txt p1label" x="${labA.x.toFixed(1)}" y="${labA.y.toFixed(1)}" text-anchor="middle" font-size="18" font-style="italic">λA</text>
+
+    <!-- λB -->
+    <path d="${lambdaBPath}" fill="none" stroke="#555" stroke-width="2" marker-end="url(#lr4p1arrDark)"/>
+    <text class="p1txt p1label" x="${labB.x.toFixed(1)}" y="${labB.y.toFixed(1)}" text-anchor="middle" font-size="18" font-style="italic">λB</text>
+
+    <!-- Кратчайшая дуга Δλ -->
+    <path d="${deltaPath}" fill="none" stroke="#2f5597" stroke-width="3"
+          marker-end="url(#lr4p1arrBlue)"/>
+    <text class="p1txt p1label" x="${labD.x.toFixed(1)}" y="${labD.y.toFixed(1)}" text-anchor="middle" font-size="20" font-style="italic">Δλ</text>
+
+    <!-- Центр / северный полюс -->
+    <circle cx="${CX}" cy="${CY}" r="36" fill="none" stroke="#777" stroke-width="1.2"/>
+    <text class="p1txt" x="${CX}" y="${(CY+7).toFixed(1)}" text-anchor="middle" font-size="20" font-style="italic">P<tspan baseline-shift="sub" font-size="12">N</tspan></text>
+    <!-- Короткая подпись без числовых значений -->
+    <text x="${CX}" y="${H-24}" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#334">
+      λA и λB отсчитываются от Гринвича; синяя дуга — кратчайшая Δλ.
+    </text>
+  </svg>`;
+}
+
+
+function svgGammaScaleScheme(o){
+  // Пункт 7: масштаб строится вокруг φср и зависит от |Δφ|.
+  // По виду близко к шкале из образца: слева Δφ, в центре деления,
+  // справа отдельная линия с отметкой φср.
+  const W=500, H=360;
+  const scaleX=245, leftX=120, rightX=360;
+  const top=42, bottom=310;
+
+  const depLat=o.dir===1?o.pA:o.pB;
+  const arrLat=o.dir===1?o.pB:o.pA;
+  const absD=Math.abs(o.dphi);
+  const half=Math.max(absD/2,1);
+
+  let step;
+  if(absD>60) step=10;
+  else if(absD>30) step=5;
+  else if(absD>12) step=2;
+  else step=1;
+
+  // Диапазон определяем от средней широты ± половина Δφ,
+  // затем даём небольшой запас и округляем до шага.
+  const margin=Math.max(step,absD*0.08);
+  let lo=Math.floor((o.pavg-half-margin)/step)*step;
+  let hi=Math.ceil((o.pavg+half+margin)/step)*step;
+  lo=Math.max(-90,lo);
+  hi=Math.min(90,hi);
+
+  // Чтобы картинка не была слишком "пустой" при близких широтах.
+  if(hi-lo < step*6){
+    const need=(step*6-(hi-lo))/2;
+    lo=Math.max(-90,Math.floor((lo-need)/step)*step);
+    hi=Math.min(90,Math.ceil((hi+need)/step)*step);
+  }
+
+  function y(phi){
+    return top+(hi-phi)/(hi-lo)*(bottom-top);
+  }
+  function tickLabel(v){
+    if(Math.abs(v)<1e-9) return 'φ = 0°';
+    const a=Math.abs(v);
+    const n=Math.abs(a-Math.round(a))<1e-9?a.toFixed(0):a.toFixed(1);
+    return `${n}°${v>0?'N':'S'}`;
+  }
+
+  const yA=y(o.pA), yB=y(o.pB), yAvg=y(o.pavg);
+  const yDep=y(depLat), yArr=y(arrLat);
+  const labelA = o.labelA || 'φA';
+  const labelB = o.labelB || 'φB';
+
+  const ticks=[];
+  for(let v=Math.floor(hi/step)*step;v>=lo-1e-9;v-=step){
+    ticks.push(+v.toFixed(6));
+  }
+
+  // Подписи A/B разводим, если точки почти совпали по экрану.
+  let labelYA=yA, labelYB=yB;
+  if(Math.abs(labelYA-labelYB)<22){
+    if(labelYA<=labelYB){ labelYA-=11; labelYB+=11; }
+    else { labelYA+=11; labelYB-=11; }
+  }
+
+  const dphiName=o.dphi>=0?'N':'S';
+
+  return `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="335"
+       aria-label="Пункт 7 — проверка средней широты и разности широт">
+    <defs>
+      <marker id="lr4p7arr" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#111"/>
+      </marker>
+    </defs>
+    <rect width="${W}" height="${H}" fill="#fff"/>
+
+    <!-- Центральная шкала -->
+    ${ticks.map(v=>{
+      const yy=y(v);
+      const strong=Math.abs(v)<1e-9;
+      return `
+        <line x1="${scaleX-16}" y1="${yy.toFixed(1)}" x2="${scaleX+16}" y2="${yy.toFixed(1)}"
+              stroke="#111" stroke-width="${strong?2:1.4}"/>
+        <text x="${scaleX+28}" y="${(yy+5).toFixed(1)}" font-family="Times New Roman,serif"
+              font-size="${strong?15:14}" ${strong?'font-weight="700"':''}>${tickLabel(v)}</text>`;
+    }).join('')}
+
+    <!-- Левая линия: φA, φB и Δφ -->
+    <line x1="${leftX}" y1="${Math.min(yA,yB).toFixed(1)}"
+          x2="${leftX}" y2="${Math.max(yA,yB).toFixed(1)}"
+          stroke="#111" stroke-width="2"/>
+
+    <line x1="${leftX}" y1="${yDep.toFixed(1)}" x2="${leftX}" y2="${yArr.toFixed(1)}"
+          stroke="#111" stroke-width="2.2" marker-end="url(#lr4p7arr)"/>
+
+    <circle cx="${leftX}" cy="${yA.toFixed(1)}" r="4" fill="#111"/>
+    <circle cx="${leftX}" cy="${yB.toFixed(1)}" r="4" fill="#111"/>
+
+    <line x1="${leftX+5}" y1="${yA.toFixed(1)}" x2="${scaleX-24}" y2="${yA.toFixed(1)}"
+          stroke="#777" stroke-width="1" stroke-dasharray="4 4"/>
+    <line x1="${leftX+5}" y1="${yB.toFixed(1)}" x2="${scaleX-24}" y2="${yB.toFixed(1)}"
+          stroke="#777" stroke-width="1" stroke-dasharray="4 4"/>
+
+    <text x="${leftX-18}" y="${(labelYA+5).toFixed(1)}" text-anchor="end"
+          font-family="Times New Roman,serif" font-size="16" font-style="italic">${labelA}</text>
+    <text x="${leftX-18}" y="${(labelYB+5).toFixed(1)}" text-anchor="end"
+          font-family="Times New Roman,serif" font-size="16" font-style="italic">${labelB}</text>
+
+    <text x="${leftX-28}" y="${((yA+yB)/2-7).toFixed(1)}" text-anchor="end"
+          font-family="Times New Roman,serif" font-size="17" font-style="italic">Δφ</text>
+    <text x="${leftX-28}" y="${((yA+yB)/2+13).toFixed(1)}" text-anchor="end"
+          font-family="Times New Roman,serif" font-size="14">≈ ${dm(Math.abs(o.dphi),1)} ${dphiName}</text>
+
+    <!-- Правая линия и указатель средней широты -->
+    <line x1="${rightX}" y1="${Math.min(yA,yB).toFixed(1)}"
+          x2="${rightX}" y2="${Math.max(yA,yB).toFixed(1)}"
+          stroke="#111" stroke-width="2"/>
+    <circle cx="${rightX}" cy="${yA.toFixed(1)}" r="4" fill="#111"/>
+    <circle cx="${rightX}" cy="${yB.toFixed(1)}" r="4" fill="#111"/>
+
+    <polygon points="${rightX},${yAvg.toFixed(1)} ${rightX+28},${(yAvg-7).toFixed(1)} ${rightX+28},${(yAvg+7).toFixed(1)}"
+             fill="#111"/>
+    <text x="${rightX+38}" y="${(yAvg-5).toFixed(1)}"
+          font-family="Times New Roman,serif" font-size="17" font-style="italic">φ<tspan baseline-shift="sub" font-size="12">ср</tspan></text>
+    <text x="${rightX+38}" y="${(yAvg+15).toFixed(1)}"
+          font-family="Times New Roman,serif" font-size="14">≈ ${dmHem(o.pavg,1)}</text>
+
+    <text x="20" y="${H-18}" font-family="Arial,sans-serif" font-size="12.5" fill="#556">
+      Автомасштаб: φср = ${dmHem(o.pavg,1)}, |Δφ| = ${dm(Math.abs(o.dphi),1)}, шаг шкалы = ${step}°
+    </text>
+  </svg>`;
+}
+
 function lr4DetailedHtml(o){
   const depName=o.dir===1?'A':'B';
   const arrName=o.dir===1?'B':'A';
@@ -1112,6 +1400,7 @@ function lr4DetailedHtml(o){
   }
   h+=line(`ΔA = 90° − φA = 90° − (${lr4Signed(o.pA,6)}°) = ${fix(o.dA,6)}°`);
   h+=line(`ΔB = 90° − φB = 90° − (${lr4Signed(o.pB,6)}°) = ${fix(o.dB,6)}°`);
+  h+=`<div class="scheme">${svgTopViewScheme(o)}</div>`;
 
   h+=`<div class="section-title">2. Объёмный чертёж сферического треугольника</div>`;
   h+=`<div class="scheme">${svgSphereScheme(o)}</div>`;
@@ -1179,6 +1468,7 @@ function lr4DetailedHtml(o){
   h+=line(`γ/2 = arctg(${fix(o.tgHalf,6)}) = ${fix(gammaHalf,6)}°`);
   h+=line(`γ = 2 · ${fix(gammaHalf,6)}° = ${fix(o.gamma,6)}° ≈ ${fix(o.gamma,1)}°`);
   h+=line(`Проверка: γ = ${fix(o.gamma,1)}°; ΔK = ${fix(o.dK,1)}° ${gammaOk?'✓':''}`);
+  h+=`<div class="scheme">${svgGammaScaleScheme(o)}</div>`;
 
   h+=`<div class="section-title">8. Расчёт элементов локсодромии</div>`;
   h+=line(`Меридиональные части: МЧ = ±3437,75 · ln[tg(45° + |φ|/2)]`);
